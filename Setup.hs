@@ -87,8 +87,8 @@ rustBuildHook description localBuildInfo hooks flags = do
     rustTargetDir = dir <> "/target"
     sourceBuildDir = rustTargetDir <> "/release"
     targetBuildDir = buildDir localBuildInfo
-    staticSource = sourceBuildDir <> "/" <> mkGenericStaticLibName "sp1_verifier_hs"
-    staticTarget = targetBuildDir <> "/" <> mkGenericStaticLibName "sp1_verifier_hs"
+    staticSource = sourceBuildDir <> "/" <> "libsp1_verifier_hs.a"
+    staticTarget = targetBuildDir <> "/" <> mkGenericStaticLibName "Csp1_verifier_hs"
 
   copyFileVerbose verbosity staticSource staticTarget
 
