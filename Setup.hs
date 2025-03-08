@@ -1,69 +1,63 @@
-{-# LANGUAGE ScopedTypeVariables #-}
-
-import Distribution.Simple
-import Distribution.Simple.LocalBuildInfo
-import Distribution.Simple.Setup
-import Distribution.Simple.Utils
-import System.Process
-import System.Directory
-import Control.Exception
-import Distribution.Verbosity
-import Distribution.System (buildPlatform, buildOS, OS(..))
-import qualified Distribution.PackageDescription as PD
-import Distribution.Simple.Program.Find
-import System.FilePath
 import Data.Maybe
-
--- The build process leverages a custom Setup configuration as described in Michivi's article (https://blog.michivi.com/posts/2022-08-cabal-setup/).
--- This approach allows us to dynamically inject the necessary --extra-lib-dirs and --extra-include-dirs flags during compilation, providing greater
--- flexibility for managing external dependencies.
+import qualified Distribution.PackageDescription as PD
+import Distribution.Simple
+  ( UserHooks (confHook, preConf),
+     defaultMainWithHooks,
+     simpleUserHooks,
+  )
+import Distribution.Simple.LocalBuildInfo
+   ( LocalBuildInfo (localPkgDescr),
+   )
+import Distribution.Simple.Setup
+   ( BuildFlags (buildVerbosity),
+     ConfigFlags (configVerbosity),
+     fromFlag,
+   )
+import Distribution.Simple.UserHooks
+   ( UserHooks (buildHook, confHook),
+   )
+import Distribution.Simple.Utils (rawSystemExit)
+import System.Directory (getCurrentDirectory)
 
 main :: IO ()
-main = defaultMainWithHooks hooks
-  where
-    hooks =
-        simpleUserHooks
-            { preConf = \_ flags -> do
-                rsMake (fromFlag $ configVerbosity flags)
-                pure PD.emptyHookedBuildInfo
+main =
+   defaultMainWithHooks
+     simpleUserHooks
+       { confHook = rustConfHook
+       , buildHook = rustBuildHook
+       }
 
-            , confHook = \a flags ->
-                confHook simpleUserHooks a flags
-                    >>= rsAddDirs
+rustConfHook ::
+   (PD.GenericPackageDescription, PD.HookedBuildInfo) ->
+   ConfigFlags ->
+   IO LocalBuildInfo
+rustConfHook (description, buildInfo) flags = do
+   localBuildInfo <- confHook simpleUserHooks (description, buildInfo) flags
+   let packageDescription = localPkgDescr localBuildInfo
+       library = fromJust $ PD.library packageDescription
+       libraryBuildInfo = PD.libBuildInfo library
+   dir <- getCurrentDirectory
+   return localBuildInfo
+     { localPkgDescr = packageDescription
+       { PD.library = Just $ library
+         { PD.libBuildInfo = libraryBuildInfo
+           { PD.extraLibDirs = (dir ++ "/target/release") :
+                               (dir ++ "/target/debug") :
+             PD.extraLibDirs libraryBuildInfo
+     } } } }
 
-            , postClean = \_ flags _ _ ->
-                rsClean (fromFlag $ cleanVerbosity flags)
-            }
-
-execCargo :: Verbosity -> String -> [String] -> IO ()
-execCargo verbosity command args = do
-    cargoPath <- findProgramOnSearchPath silent defaultProgramSearchPath "cargo"
-    dir <- getCurrentDirectory
-    let cargoExec = case cargoPath of
-            Just (p, _) -> p
-            Nothing -> "cargo"
-        cargoArgs = command : args
-        workingDir = Just dir
-        thirdComponent (_, _, c) = c
-    maybeExit . fmap thirdComponent $ rawSystemStdInOut verbosity cargoExec cargoArgs workingDir Nothing Nothing IODataModeBinary
-
-rsMake :: Verbosity -> IO ()
-rsMake verbosity = execCargo verbosity "build" ["--release", "--lib"]
-
-rsAddDirs :: LocalBuildInfo -> IO LocalBuildInfo
-rsAddDirs lbi' = do
-    dir <- getCurrentDirectory
-    let rustIncludeDir = dir
-        rustLibDir = dir </> "target/release"
-        updateLbi lbi = lbi{localPkgDescr = updatePkgDescr (localPkgDescr lbi)}
-        updatePkgDescr pkgDescr = pkgDescr{PD.library = updateLib <$> PD.library pkgDescr}
-        updateLib lib = lib{PD.libBuildInfo = updateLibBi (PD.libBuildInfo lib)}
-        updateLibBi libBuild =
-            libBuild
-                { PD.includeDirs = rustIncludeDir : PD.includeDirs libBuild
-                , PD.extraLibDirs = rustLibDir : PD.extraLibDirs libBuild
-                }
-    pure $ updateLbi lbi'
-
-rsClean :: Verbosity -> IO ()
-rsClean verbosity = execCargo verbosity "clean" []
+rustBuildHook ::
+   PD.PackageDescription ->
+   LocalBuildInfo ->
+   UserHooks ->
+   BuildFlags ->
+   IO ()
+rustBuildHook description localBuildInfo hooks flags = do
+   putStrLn "******************************************************************"
+   putStrLn "Call `cargo build --release` to build a dependency written in Rust"
+   -- FIXME: add `--target $TARGET` flag to support cross-compiling to $TARGET
+   rawSystemExit (fromFlag $ buildVerbosity flags) "cargo" ["build","--release"]
+   putStrLn "... `rustc` compilation seems to succeed 🦀! Back to Cabal build:"
+   putStrLn "******************************************************************"
+   putStrLn "Back to Cabal build"
+   buildHook simpleUserHooks description localBuildInfo hooks flags

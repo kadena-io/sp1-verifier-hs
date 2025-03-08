@@ -7,4 +7,4 @@ edition = "2024"
 sp1-verifier = "4.1.2"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["staticlib"]
